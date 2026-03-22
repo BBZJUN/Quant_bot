@@ -1,0 +1,22 @@
+# API 키 보호 (절대 외부 유출 금지)
+config/settings.py
+
+# 데이터베이스
+data/database/*.db
+
+# 로그
+logs/*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+.venv/
+
+# 데이터 파일
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
