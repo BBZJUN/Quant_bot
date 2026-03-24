@@ -104,6 +104,9 @@ class KISApi:
             "volume":        int(o.get("acml_vol", 0)),
             "change_rate":   float(o.get("prdy_ctrt", 0)),
             "market_cap":    int(o.get("hts_avls", 0)) * 100_000_000,
+            "pbr":           float(o.get("pbr", 0) or 0),
+            "per":           float(o.get("per", 0) or 0),
+            "eps":           float(o.get("eps", 0) or 0),
             "timestamp":     datetime.now().isoformat(),
         }
 
@@ -122,7 +125,7 @@ class KISApi:
 
         url    = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
         params = {
-            "FID_COND_MRKT_DIV_CODE": market,
+            "FID_COND_MRKT_DIV_CODE": "J",  # 국내 주식은 KOSPI/KOSDAQ 무관하게 J
             "FID_INPUT_ISCD":         ticker,
             "FID_INPUT_DATE_1":       start,
             "FID_INPUT_DATE_2":       end,
@@ -206,6 +209,46 @@ class KISApi:
     # =========================================================
     # 주문
     # =========================================================
+    def get_investor_trend(self, ticker: str, market: str = "J") -> dict:
+        """
+        기관/외국인/개인 순매수 조회 (최근 5거래일 합산)
+        returns: {"institution": int, "foreign": int, "individual": int}
+        양수 = 순매수, 음수 = 순매도
+        """
+        url    = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-investor"
+        params = {
+            "FID_COND_MRKT_DIV_CODE": market,
+            "FID_INPUT_ISCD":         ticker,
+        }
+        try:
+            resp = requests.get(url, headers=self._headers("FHKST01010900"),
+                                params=params, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+
+            if data.get("rt_cd") != "0" or not data.get("output"):
+                return {"institution": 0, "foreign": 0, "individual": 0}
+
+            institution = 0
+            foreign     = 0
+            individual  = 0
+            for row in data["output"][:5]:  # 최근 5일
+                institution += int(row.get("orgn_ntby_qty",  0) or 0)
+                foreign     += int(row.get("frgn_ntby_qty",  0) or 0)
+                individual  += int(row.get("indv_ntby_qty",  0) or 0)
+
+            logger.debug(
+                f"수급 [{ticker}] 기관={institution:+,} 외국인={foreign:+,} 개인={individual:+,}"
+            )
+            return {
+                "institution": institution,
+                "foreign":     foreign,
+                "individual":  individual,
+            }
+        except Exception as e:
+            logger.warning(f"수급 조회 실패 [{ticker}]: {e}")
+            return {"institution": 0, "foreign": 0, "individual": 0}
+
     def buy_market(self, ticker: str, quantity: int) -> dict:
         """시장가 매수"""
         return self._order(ticker, quantity, order_type="01", is_buy=True)

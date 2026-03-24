@@ -46,31 +46,23 @@ class FactorStrategy:
 
     def get_fundamental(self, ticker: str, market: str = "J") -> dict:
         """
-        PBR / ROE 조회 (KIS 재무 API)
+        PBR / ROE 조회
+        - PBR: 현재가 API에서 직접 추출 (안정적)
+        - ROE: EPS / (현재가 / PBR) 로 추정
         """
-        url    = f"{self.api.base_url}/uapi/domestic-stock/v1/finance/financial-ratio"
-        params = {
-            "FID_COND_MRKT_DIV_CODE": market,
-            "FID_INPUT_ISCD":         ticker,
-            "FID_DIV_CLS_CODE":       "0",
-        }
         try:
-            import requests
-            resp = requests.get(
-                url, headers=self.api._headers("FHKST66430300"),
-                params=params, timeout=10,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            price_data = self.api.get_current_price(ticker, market="J")
+            pbr = price_data.get("pbr", 0)
+            eps = price_data.get("eps", 0)
+            price = price_data.get("current_price", 0)
 
-            if data.get("rt_cd") != "0" or not data.get("output"):
-                return {}
+            # ROE 추정: EPS / BPS = EPS / (Price / PBR)
+            roe = 0.0
+            if pbr > 0 and price > 0 and eps > 0:
+                bps = price / pbr
+                roe = (eps / bps) * 100  # % 단위
 
-            o = data["output"][0]
-            return {
-                "pbr": float(o.get("pbr", 0) or 0),
-                "roe": float(o.get("roe", 0) or 0),
-            }
+            return {"pbr": pbr, "roe": roe}
         except Exception as e:
             logger.warning(f"재무 조회 실패 [{ticker}]: {e}")
             return {}
@@ -111,14 +103,22 @@ class FactorStrategy:
             if pbr is None or roe is None or pbr <= 0:
                 continue
 
+            # 수급 분석 (점수 가산용, 하드 필터 아님)
+            investor = self.api.get_investor_trend(ticker, market)
+            institution_buy = investor.get("institution", 0)
+            foreign_buy     = investor.get("foreign", 0)
+            # 기관+외국인 순매수 합산 (양수일수록 좋음)
+            flow_score = institution_buy + foreign_buy
+
             records.append({
-                "ticker":   ticker,
-                "name":     row["name"],
-                "sector":   row["sector"],
-                "market":   row["market"],
-                "pbr":      pbr,
-                "roe":      roe,
-                "momentum": momentum,
+                "ticker":      ticker,
+                "name":        row["name"],
+                "sector":      row["sector"],
+                "market":      row["market"],
+                "pbr":         pbr,
+                "roe":         roe,
+                "momentum":    momentum,
+                "flow_score":  flow_score,
             })
 
         if not records:
@@ -142,10 +142,14 @@ class FactorStrategy:
             (df["momentum_rank"] <= mom_cut)
         ].copy()
 
-        # 종합 점수 = 3개 순위 평균 (낮을수록 좋음)
+        # 수급 순위 (높을수록 좋음 → ascending=False로 낮은 rank가 좋은 것)
+        selected["flow_rank"] = selected["flow_score"].rank(pct=True, ascending=False)
+
+        # 종합 점수: 팩터 3개 + 수급 1개 (낮을수록 좋음)
         selected["score"] = (
-            selected["pbr_rank"] + selected["roe_rank"] + selected["momentum_rank"]
-        ) / 3
+            selected["pbr_rank"] + selected["roe_rank"] +
+            selected["momentum_rank"] + selected["flow_rank"]
+        ) / 4
         selected = selected.sort_values("score").reset_index(drop=True)
 
         logger.info(f"팩터 스크리닝 완료: {len(selected)}종목 선별")

@@ -1,15 +1,17 @@
 """
 리스크 관리
-- 종목별 손절 / 익절
+- 종목별 손절 / 익절 (동적 판단)
 - 포트폴리오 전체 손절
 - 포지션 크기 제한
 """
 
+from datetime import datetime
 from pathlib import Path
 import sys
 
 sys.path.append(str(Path(__file__).parent.parent))
 from config.settings import RISK_CONFIG
+from strategy.exit_strategy import ExitStrategy
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -20,6 +22,7 @@ class RiskManager:
         self.api   = kis_api
         self.om    = order_manager
         self.cfg   = RISK_CONFIG
+        self.exit  = ExitStrategy(kis_api)
 
     def check_stop_loss(self, balance: dict) -> list:
         """
@@ -70,7 +73,7 @@ class RiskManager:
         return False
 
     def execute_stop_loss(self, balance: dict):
-        """손절 조건 확인 후 자동 매도"""
+        """동적 매도 판단 후 자동 매도"""
         # 포트폴리오 전체 손절
         if self.check_portfolio_stop(balance):
             logger.error("전체 포트폴리오 현금화 실행")
@@ -78,15 +81,31 @@ class RiskManager:
                 self.om.sell_all(holding["ticker"], holding["quantity"])
             return
 
-        # 종목별 손절
-        for holding in self.check_stop_loss(balance):
-            logger.warning(f"종목 손절 실행: {holding['ticker']}")
-            self.om.sell_all(holding["ticker"], holding["quantity"])
+        # 종목별 동적 판단
+        for holding in balance.get("holdings", []):
+            ticker = holding["ticker"]
+            market = "J"  # 기본 코스피, 추후 코스닥 구분 가능
 
-        # 종목별 익절
-        for holding in self.check_take_profit(balance):
-            logger.info(f"종목 익절 실행: {holding['ticker']}")
-            self.om.sell_all(holding["ticker"], holding["quantity"])
+            try:
+                ohlcv = self.api.get_ohlcv(ticker, period="D", market=market)
+            except Exception as e:
+                logger.warning(f"OHLCV 조회 실패 [{ticker}]: {e}")
+                ohlcv = []
+
+            decision = self.exit.should_sell(holding, ohlcv)
+
+            if decision["sell"]:
+                action = "익절" if holding["profit_rate"] >= 0 else "손절"
+                logger.info(
+                    f"{action} 실행 [{holding.get('name', ticker)}] "
+                    f"수익률={holding['profit_rate']:+.1f}% | {decision['reason']}"
+                )
+                self.om.sell_all(ticker, holding["quantity"], holding.get("name", ""))
+            else:
+                logger.info(
+                    f"보유 유지 [{holding.get('name', ticker)}] "
+                    f"수익률={holding['profit_rate']:+.1f}% | {decision['reason']}"
+                )
 
     def calc_position_size(self, total_cash: int, weight: float,
                            price: int) -> int:

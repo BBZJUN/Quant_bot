@@ -26,6 +26,9 @@ from monitoring.reporter import Reporter
 from utils.logger import get_logger
 from utils.date_utils import is_trading_day, is_rebalance_day, is_market_open
 
+# 돈깡 계절성 필터: 해당 월은 신규 진입 자제 (역사적으로 변동성 높은 달)
+RISKY_MONTHS = {7, 9, 10}
+
 logger = get_logger(__name__)
 
 
@@ -60,6 +63,13 @@ class TradingBot:
                 self.om.sell_all(h["ticker"], h["quantity"], h.get("name", ""))
             logger.info("시장 이탈 신호 → 전량 현금화 완료")
 
+        # 계절성 경고
+        current_month = datetime.now().month
+        if current_month in RISKY_MONTHS:
+            logger.warning(
+                f"[계절성 경고] {current_month}월은 역사적 고변동성 구간 → 신규 진입 자제"
+            )
+
     def risk_monitoring(self):
         """장 중 10분마다 - 손절/익절 모니터링"""
         if not is_market_open():
@@ -74,6 +84,13 @@ class TradingBot:
             return
 
         logger.info("=== 월간 리밸런싱 시작 ===")
+
+        # 계절성 필터: 위험 달에는 리밸런싱(신규 매수) 건너뜀
+        current_month = datetime.now().month
+        if current_month in RISKY_MONTHS:
+            logger.warning(f"[계절성 필터] {current_month}월 → 리밸런싱 건너뜀 (고변동성 구간)")
+            return
+
         signal = self.momentum.get_signal()
 
         if not signal["invest"]:

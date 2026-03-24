@@ -66,7 +66,7 @@ class DualMomentum:
             }
 
         # 상대 모멘텀: 코스피 vs 코스닥 (KODEX 코스닥150 = 229200)
-        kosdaq_ret = self._calc_return("229200", self.lookback, market="Q")
+        kosdaq_ret = self._calc_return("229200", self.lookback, market="J")
 
         if kospi200_ret >= kosdaq_ret:
             chosen = "KOSPI"
